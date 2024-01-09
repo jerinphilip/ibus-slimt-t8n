@@ -1,0 +1,112 @@
+name: "main"
+on:
+  push:
+    branches:
+    - main
+  pull_request:
+    branches:
+    - '**'
+env:
+  ccache_basedir: ${{ github.workspace }}
+  ccache_dir: "${{ github.workspace }}/.ccache"
+  ccache_compilercheck: content
+  ccache_compress: 'true'
+  ccache_compresslevel: 9
+  ccache_maxsize: 200M
+  ccache_cmake: -DCMAKE_CXX_COMPILER_LAUNCHER=ccache -DCMAKE_C_COMPILER_LAUNCHER=ccache
+
+jobs:
+    main:
+      name: "build-test"
+      runs-on: "ubuntu-latest"
+      steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          submodules: recursive
+      - name: Install Dependencies
+        run: |-
+          sudo apt-get update
+          sudo apt-get install -y \
+            ccache                \
+            libibus-1.0-dev       \
+            libyaml-cpp-dev       \
+
+      - name: Install slimt
+        run: |-
+          sudo apt-get install -y libopenblas-dev libsentencepiece-dev
+
+          # libxsimd-dev fails due to some issue.
+          git clone https://github.com/xtensor-stack/xsimd --branch 11.1.0 --depth 1
+          cmake -B xsimd/build -S xsimd
+          cmake --build xsimd/build --target all
+          sudo cmake --build xsimd/build --target install
+
+          git clone --recursive https://github.com/jerinphilip/slimt --single-branch --branch main
+          cmake -B slimt/build -S slimt -DUSE_BUILTIN_SENTENCEPIECE=OFF                    \
+            -DWITH_GEMMOLOGY=ON -DUSE_AVX2=ON -DUSE_SSE2=ON -DUSE_SSSE3=ON -DUSE_AVX512=ON \
+            -DWITH_INTGEMM=OFF                                                             \
+            -DSLIMT_PACKAGE=ON
+          cmake --build slimt/build --target all
+          sudo cmake --build slimt/build --target install
+
+      - name: Generate ccache_vars for ccache based on machine
+        shell: bash
+        id: ccache_vars
+        run: |-
+          echo "::set-output name=hash::$(echo ${{ env.ccache_compilercheck }})"
+          echo "::set-output name=timestamp::$(date '+%Y-%m-%dT%H.%M.%S')"
+
+      - name: Cache-op for build-cache through ccache
+        uses: actions/cache@v2
+        with:
+          path: ${{ env.ccache_dir }}
+          key: ccache-${{ matrix.identifier }}-${{ steps.ccache_vars.outputs.hash }}-${{ github.ref }}-${{ steps.ccache_vars.outputs.timestamp }}
+          restore-keys: |-
+            ccache-${{ matrix.identifier }}-${{ steps.ccache_vars.outputs.hash }}-${{ github.ref }}
+            ccache-${{ matrix.identifier }}-${{ steps.ccache_vars.outputs.hash }}
+            ccache-${{ matrix.identifier }}
+      - name: ccache environment setup
+        run: |-
+          echo "CCACHE_COMPILER_CHECK=${{ env.ccache_compilercheck }}" >> $GITHUB_ENV
+          echo "CCACHE_BASEDIR=${{ env.ccache_basedir }}" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESS=${{ env.ccache_compress }}" >> $GITHUB_ENV
+          echo "CCACHE_COMPRESSLEVEL=${{ env.ccache_compresslevel }}" >> $GITHUB_ENV
+          echo "CCACHE_DIR=${{ env.ccache_dir }}" >> $GITHUB_ENV
+          echo "CCACHE_MAXSIZE=${{ env.ccache_maxsize }}" >> $GITHUB_ENV
+      - name: ccache prolog
+        run: |-
+          ccache -s # Print current cache stats
+          ccache -z # Zero cache entry
+      - name: cmake
+        run: |-
+          mkdir -p build
+          cd build
+          cmake -L .. -DCOMPILE_TESTS=on ${{ env.ccache_cmake }}
+
+      - name: Build from source
+        working-directory: build
+        run: |
+          make -j2
+
+      - name: "Download models (slimt) and configure ibus-slimt-t8n"
+        run: |-
+          # Install bergamot, which will manage models.
+          python3 -m pip install slimt -f https://github.com/jerinphilip/slimt/releases/expanded_assets/latest
+
+          # Download models.
+          slimt download -m en-fr-tiny
+          slimt download -m fr-en-tiny
+          slimt download -m de-en-tiny
+          slimt download -m en-de-tiny
+
+          python3 scripts/ibus-slimt-t8n-configure.py --default browsermt/en-de-tiny --verify
+
+      - name: Test translator backend
+        working-directory: build/ibus-slimt-t8n
+        run: |-
+          ./test fake < ${{ github.workspace }}/data/samples.txt
+          ./test real < ${{ github.workspace }}/data/samples.txt
+
+      - name: ccache epilog
+        run: 'ccache -s # Print current cache stats'

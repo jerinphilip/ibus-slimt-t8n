@@ -1,0 +1,44 @@
+# Sample config for slimt-t8n
+#
+# We want iBus to be (hand) configurable by the user, and not reliant on the
+# structure imposed by the package managing system.
+
+# Ideally authors like for these to be codes, but this is already set by
+# translateLocally.
+
+languages:
+  - "German"
+  - "French"
+  - "English"
+  - "Czech"
+  - "Spanish"
+
+default:
+  - source: "English"
+    target: "German"
+
+verify: true
+
+# TODO(jerin): Spec and incorporate.
+# preferred:
+#   - model: "en-de-tiny" 
+#     source: "English"
+#     target: "German"
+# 
+#   - model: "en-de-tiny" 
+#     source: "English"
+#     target: "German"
+
+
+models:
+  - name: "en-de-tiny"
+    arch: "tiny"
+    direction:
+      source: "English"
+      target: "German"
+    root: ".local/share/slimt/models/browsermt/en-de-tiny"
+    model: "model.intgemm.alphas.bin"
+    vocabulary:
+      source: "vocab.ende.spm"
+      target: "vocab.ende.spm"
+    shortlist: "lex.s2t.bin"
